@@ -690,10 +690,10 @@ def _i_run_a_whatever_command(context, command):
       r' "{backup_name}" with md5 checks "{md5_enabled_str}"')
 def _i_perform_a_backup_of_the_node_named_backupname(context, backup_mode, backup_name, md5_enabled_str):
     BackupMan.register_backup(backup_name, is_async=False)
-    (actual_backup_duration, actual_start, end, node_backup, node_backup_cache, num_files, start, backup_name) = \
-        backup_node.handle_backup(context.medusa_config, backup_name, None, str(md5_enabled_str).lower() == "enabled",
-                                  backup_mode)
-    context.latest_backup_cache = node_backup_cache
+    (_, _, _, _, _, num_replaced, _, _) = backup_node.handle_backup(
+        context.medusa_config, backup_name, None, str(md5_enabled_str).lower() == "enabled", backup_mode
+    )
+    context.latest_backup_replaced = num_replaced
 
 
 @when(r'I perform a backup over gRPC in "{backup_mode}" mode of the node named "{backup_name}"')
@@ -833,7 +833,7 @@ def _i_can_see_the_backup_named_backupname_when_i_list_the_backups(
 
 @then(r'some files from the previous backup were not reuploaded')
 def _some_files_from_the_previous_backup_were_not_reuploaded(context):
-    assert context.latest_backup_cache.replaced > 0
+    assert context.latest_backup_replaced > 0
 
 
 @then(r'I cannot see the backup named "{backup_name}" when I list the backups')
@@ -1401,15 +1401,21 @@ def _the_backup_named_is_incomplete(context, backup_name):
                 assert not backup.finished
 
 
-@then(u'I delete a random sstable from backup "{backup_name}" in the "{table}" table in keyspace "{keyspace}"')
-def _i_delete_a_random_sstable(context, backup_name, table, keyspace):
+@then(u'I delete a random sstable from "{backup_type}" backup "{backup_name}" '
+      u'in the "{table}" table in keyspace "{keyspace}"')
+def _i_delete_a_random_sstable(context, backup_type, backup_name, table, keyspace):
     with Storage(config=context.medusa_config.storage) as storage:
         path_root = BUCKET_ROOT
 
         fqdn = "127.0.0.1"
-        path_sstables = "{}/{}{}/{}/data/{}/{}*".format(
-            path_root, storage.prefix_path, fqdn, backup_name, keyspace, table
-        )
+        if backup_type == "full":
+            path_sstables = "{}/{}{}/{}/data/{}/{}*".format(
+                path_root, storage.prefix_path, fqdn, backup_name, keyspace, table
+            )
+        else:
+            path_sstables = "{}/{}{}/data/{}/{}*".format(
+                path_root, storage.prefix_path, fqdn, keyspace, table
+            )
 
         table_path = glob.glob(path_sstables)[0]
         sstable_files = os.listdir(table_path)

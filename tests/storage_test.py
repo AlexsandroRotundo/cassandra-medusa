@@ -23,14 +23,21 @@ import unittest
 
 from datetime import datetime
 from random import randrange
+from unittest.mock import patch
 
 import medusa.storage.abstract_storage
 
 from medusa.storage import NodeBackup, ClusterBackup
-from medusa.storage.abstract_storage import AbstractStorage, AbstractBlob
+from medusa.storage.abstract_storage import AbstractStorage, AbstractBlob, ManifestObject
 from medusa.config import MedusaConfig, StorageConfig, _namedtuple_from_dict, CassandraConfig
 from medusa.index import build_indices
 from medusa.storage import Storage
+
+
+class AttributeDict(dict):
+    __slots__ = ()
+    __getattr__ = dict.__getitem__
+    __setattr__ = dict.__setitem__
 
 
 class StorageTest(unittest.TestCase):
@@ -354,6 +361,70 @@ class StorageTest(unittest.TestCase):
             1574343029,
             self.storage.get_timestamp_from_blob_name('index/bi/third_backup/finished_localhost_1574343029.timestamp')
         )
+
+    def test_list_files_per_table_with_prefix(self):
+
+        def fake_blob(s):
+            return AbstractBlob(s, 0, '0', datetime.now())
+
+        def fake_mo(s):
+            return ManifestObject(s, 0, '0')
+
+        config = AttributeDict({
+            'bucket_name': 'test-bucket',
+            'base_path': 'test-path',
+            'prefix': 'test-prefix',
+            'fqdn': 'test-fqdn',
+            'k8s_mode': False,
+            'storage_provider': 'local'
+        })
+        s = Storage(config=config)
+        listed_files = [
+            fake_blob('test-prefix/test-fqdn/data/test-keyspace/test-table-1/test-file-1.db'),
+            fake_blob('test-prefix/test-fqdn/data/test-keyspace/test-table-2/test-file-2.db'),
+            fake_blob('test-prefix/test-fqdn/data/test-keyspace/test-table-1/.index/test-file-1.db'),
+            fake_blob('test-prefix/test-fqdn/data/test-keyspace-2/test-table-2/test-file-1.db'),
+            fake_blob('test-prefix/test-fqdn/data/dse/metadata/nodes/local'),
+            # not having prefix actually doesn't matter because we parse from the end
+            fake_blob('test-fqdn/data/test-keyspace-3/test-table-1/test-file-1.db'),
+            fake_blob('test-fqdn/data/test-keyspace-3/test-table-2/test-file-2.db'),
+
+        ]
+        expected_grouping = {
+            'test-keyspace': {
+                'test-table-1': {
+                    'test-file-1.db': fake_mo('test-prefix/test-fqdn/data/test-keyspace/test-table-1/test-file-1.db')
+                },
+                'test-table-1..index': {
+                    'test-file-1.db':
+                        fake_mo('test-prefix/test-fqdn/data/test-keyspace/test-table-1/.index/test-file-1.db')
+                },
+                'test-table-2': {
+                    'test-file-2.db': fake_mo('test-prefix/test-fqdn/data/test-keyspace/test-table-2/test-file-2.db')
+                },
+            },
+            'test-keyspace-2': {
+                'test-table-2': {
+                    'test-file-1.db': fake_mo('test-prefix/test-fqdn/data/test-keyspace-2/test-table-2/test-file-1.db')
+                }
+            },
+            'dse': {
+                'metadata.nodes': {
+                    'local': fake_mo('test-prefix/test-fqdn/data/dse/metadata/nodes/local')
+                }
+            },
+            'test-keyspace-3': {
+                'test-table-1': {
+                    'test-file-1.db': fake_mo('test-fqdn/data/test-keyspace-3/test-table-1/test-file-1.db')
+                },
+                'test-table-2': {
+                    'test-file-2.db': fake_mo('test-fqdn/data/test-keyspace-3/test-table-2/test-file-2.db')
+                }
+            },
+
+        }
+        with patch('medusa.storage.local_storage.LocalStorage._list_blobs', return_value=listed_files):
+            self.assertEqual(expected_grouping, s.list_files_per_table())
 
 
 def make_node_backup(storage, name, backup_date, differential=False, fqdn="localhost"):
